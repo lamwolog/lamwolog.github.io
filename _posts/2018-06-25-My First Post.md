@@ -1,14 +1,13 @@
 ---
-layout: post
-title: My Fisrt Post
-subtite- Hello World, Hello Blog
-data: 2018-06-25
-author: Lazyo
+layout:     post
+title:      My First Post
+subtitle:   Hello World, Hello Blog
+date:       2018-06-25
+author:     Lazyo
 header-img: img/post-bg-2015.jpg
-catalog:  true
-tags: 
-    -生活
-    
+catalog: true
+tags:
+    - 生活
 ---
 
 ## Hey
