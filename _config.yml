@@ -1,10 +1,10 @@
 # Site settings
 title: Lazyo Blog
-SEOTitle: lamwolog的博客 | Lazyo Blog
+SEOTitle: Lazyo的博客 | Lazyo Blog
 header-img: img/post-bg-desk.jpg
 email: lamwolog@gmail.com
 description: "Every failure is leading towards success."
-keyword: "Lazyo, Lazyo Blog, lamwolog的博客, lamwolog, 刘文隆, iOS, Apple, iPhone"
+keyword: "Lazyo, Lazyo Blog, Lazyo的博客, lamwolog, 刘文隆, iOS, Apple, iPhone"
 url: "http://lamwolog.github.io"          # your host, for absolute URL
 baseurl: ""      # for example, '/blog' if your blog hosted on 'host/blog'
 github_repo: "https://github.com/lamwolog/lamwolog.github.io.git" # you code repository
