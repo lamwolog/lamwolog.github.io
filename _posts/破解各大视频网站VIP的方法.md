@@ -1,0 +1,39 @@
+# 破解各大视频网站VIP的方法
+
+1. #### 安装油猴Tampermonkey
+
+不管是Chrome还是Firefox都能安装油猴，这里以Chrome举例子。进入Chrome网上应用店，搜索Tampermonkey，添加Tampermonkey
+
+##### ![Tampermonkey](C:\Users\Lazyo\Desktop\20171209142720684.png)
+
+> 如果没法使用ipv6或者翻墙进入Chrome网上应用店，可以去 [Tampermonkey](https://pan.baidu.com/s/1DghLnwPzPj0XSbJ0BD8yqg) （密码: h6kc）下载插件进行安装。插件下载完成后，打开Chrome的扩展程序页面![无标题](C:\Users\Lazyo\Desktop\无标题.png)
+>
+> 然后打开**开发者模式**将刚才下载的crx文件拖到扩展程序界面中进行安装![TIM截图20180627200551](C:\Users\Lazyo\Desktop\TIM截图20180627200551.png)
+
+2. #### 安装破解脚本
+
+安装完成油猴之后，我们点击Chrome地址栏右边的油猴图标获取脚本
+
+![TIM截图20180627201142](C:\Users\Lazyo\Desktop\TIM截图20180627201142.png)
+
+弹出的网址中包含了几个获取脚本的网址，我们以 [GreasyFork](https://greasyfork.org/zh-CN) 为例。进入网站后直接搜索关键字[**破解VIP会员视频集合**](https://greasyfork.org/zh-CN/scripts/27530-%E7%A0%B4%E8%A7%A3vip%E4%BC%9A%E5%91%98%E8%A7%86%E9%A2%91%E9%9B%86%E5%90%88)或者进入右上角的脚本列表进行查找。
+
+![InkedTIM截图20180627201821_LI](C:\Users\Lazyo\Desktop\InkedTIM截图20180627201821_LI.jpg)
+
+然后点击安装脚本后就大功告成了。
+
+3. #### 使用方法
+
+安装完脚本后我们随便打开一个视频网站，比如优酷。打开一个需要VIP才能看的视频后会发现网页左边出现一个淡黄色的状态栏。鼠标移至状态栏的播放按钮会出现许多解析网址
+
+![TIM截图20180627202307](C:\Users\Lazyo\Desktop\TIM截图20180627202307.png)
+
+我们随便打开一个，比如无名小站，就能发现已经可以看VIP视频啦
+
+![TIM截图20180627202433](C:\Users\Lazyo\Desktop\TIM截图20180627202433.png)
+
+> 如果一个解析网址不行，多试试几个。一般情况的无名小站的成功率都比较高，暂时没发现失败的情况
+
+4. 结语
+
+这个使用油猴的一个例子，如果感兴趣的话可以多逛逛其他网站看有没有其他感兴趣的脚本拿来使用，或者可以针对一些特殊情况自己写脚本进行安装。
