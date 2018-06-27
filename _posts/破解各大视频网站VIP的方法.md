@@ -1,3 +1,15 @@
+---
+layout:     post
+title:      破解各大视频网站VIP的方法
+subtitle:   Tampermonkey的使用
+date:       2018-06-27
+author:     Lazyo
+header-img: img/post-bg-2015.jpg
+catalog: true
+tags:
+    - 生活
+---
+
 # 破解各大视频网站VIP的方法
 
 1. #### 安装油猴Tampermonkey
