@@ -1,3 +1,16 @@
+---
+layout:     post
+title:      Android的UI刷新机制
+subtitle:   转载
+date:       2020-03-20
+author:     Lazyo
+header-img: img/post-bg-2015.jpg
+catalog: true
+tags:
+    - Android
+    - 底层原理
+---
+
 # Android的UI刷新机制
 
 参考：https://mp.weixin.qq.com/s/IIh2g1i6Y4rZeCTY-t6_8w
