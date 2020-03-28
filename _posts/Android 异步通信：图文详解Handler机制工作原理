@@ -1,0 +1,63 @@
+# Android 异步通信：图文详解Handler机制工作原理
+
+参考：https://blog.csdn.net/carson_ho/article/details/80175876
+
+## 1.定义
+
+一套Android消息传递机制
+
+## 2.作用
+
+在多线程的应用场景中，**将工作线程中需更新`UI`的操作信息 传递到 `UI`主线程**，从而实现 工作线程对`UI`的更新处理，最终实现异步消息的处理
+![示意图](https://imgconvert.csdnimg.cn/aHR0cDovL3VwbG9hZC1pbWFnZXMuamlhbnNodS5pby91cGxvYWRfaW1hZ2VzLzk0NDM2NS00YTY0MDM4NjMyYzRjODhmLnBuZz9pbWFnZU1vZ3IyL2F1dG8tb3JpZW50L3N0cmlwJTdDaW1hZ2VWaWV3Mi8yL3cvMTI0MA)
+
+## 3.为什么要用Handler消息传递机制
+
+- 答：**多个线程并发更新UI的同时 保证线程安全**
+- 具体描述如下
+
+![示意图](https://imgconvert.csdnimg.cn/aHR0cDovL3VwbG9hZC1pbWFnZXMuamlhbnNodS5pby91cGxvYWRfaW1hZ2VzLzk0NDM2NS03NDc5YjRhOGI4ZmU0OGJmLnBuZz9pbWFnZU1vZ3IyL2F1dG8tb3JpZW50L3N0cmlwJTdDaW1hZ2VWaWV3Mi8yL3cvMTI0MA)
+
+## 4.相关概念
+
+关于 `Handler`机制中的相关概念如下：
+
+> 在下面的讲解中，我将直接使用英文名讲解，即 `Handler`、`Message`、`Message Queue`、`Looper`，希望大家先熟悉相关概念
+
+![示意图](https://imgconvert.csdnimg.cn/aHR0cDovL3VwbG9hZC1pbWFnZXMuamlhbnNodS5pby91cGxvYWRfaW1hZ2VzLzk0NDM2NS1kMDg5MDMwODdjYjU3NWQ5LnBuZz9pbWFnZU1vZ3IyL2F1dG8tb3JpZW50L3N0cmlwJTdDaW1hZ2VWaWV3Mi8yL3cvMTI0MA)
+
+## 5.工作原理解析
+
+下面，我将定性地讲解`Handler`机制的工作流程
+
+### 5.1 工作流程解析
+
+`Handler`机制的工作流程主要包括4个步骤：
+
+1. 异步通信准备
+2. 消息发送
+3. 消息循环
+4. 消息处理
+
+具体如下图：
+
+![示意图](https://imgconvert.csdnimg.cn/aHR0cDovL3VwbG9hZC1pbWFnZXMuamlhbnNodS5pby91cGxvYWRfaW1hZ2VzLzk0NDM2NS1kZDI0MWJmMzJjMTJkZjQzLnBuZz9pbWFnZU1vZ3IyL2F1dG8tb3JpZW50L3N0cmlwJTdDaW1hZ2VWaWV3Mi8yL3cvMTI0MA)
+
+### 5.2 工作流程图
+
+![示意图](https://imgconvert.csdnimg.cn/aHR0cDovL3VwbG9hZC1pbWFnZXMuamlhbnNodS5pby91cGxvYWRfaW1hZ2VzLzk0NDM2NS0xODRlYTk0ZWMxYjVjZTA1LnBuZz9pbWFnZU1vZ3IyL2F1dG8tb3JpZW50L3N0cmlwJTdDaW1hZ2VWaWV3Mi8yL3cvMTI0MA)
+
+### 5.3 示意图
+
+![示意图](https://imgconvert.csdnimg.cn/aHR0cDovL3VwbG9hZC1pbWFnZXMuamlhbnNodS5pby91cGxvYWRfaW1hZ2VzLzk0NDM2NS1jODZjODUyZmEwYTY0ZDViLnBuZz9pbWFnZU1vZ3IyL2F1dG8tb3JpZW50L3N0cmlwJTdDaW1hZ2VWaWV3Mi8yL3cvMTI0MA)
+
+### 5.4 特别注意
+
+线程`（Thread）`、循环器`（Looper）`、处理者`（Handler）`之间的对应关系如下：
+
+1个线程`（Thread）`只能绑定 1个循环器`（Looper）`，但可以有多个处理者`（Handler）`
+1个循环器`（Looper）` 可绑定多个处理者`（Handler）`
+1个处理者`（Handler）` 只能绑定1个1个循环器`（Looper）`
+
+![示意图](https://imgconvert.csdnimg.cn/aHR0cDovL3VwbG9hZC1pbWFnZXMuamlhbnNodS5pby91cGxvYWRfaW1hZ2VzLzk0NDM2NS02MWIzODdjMGU2NmVkOGVlLnBuZz9pbWFnZU1vZ3IyL2F1dG8tb3JpZW50L3N0cmlwJTdDaW1hZ2VWaWV3Mi8yL3cvMTI0MA)
+
