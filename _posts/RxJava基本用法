@@ -1,0 +1,302 @@
+# RxJava的基本使用用法
+
+参考：https://www.jianshu.com/p/fce825833d36
+
+## 简介
+
+build文件引入依赖
+
+```android
+ compile 'io.reactivex.rxjava2:rxjava:2.2.1'
+ compile 'io.reactivex.rxjava2:rxandroid:2.1.0'
+```
+
+RxJava 作为一个工具库，使用的就是通用形式的观察者模式。
+
+RxJava 的观察者模式
+ RxJava 有四个基本概念：Observable (可观察者，即被观察者)、 Observer (观察者)、 subscribe (订阅)、事件。Observable 和 Observer 通过 subscribe() 方法实现订阅关系，从而 Observable 可以在需要的时候发出事件来通知 Observer。
+
+与传统观察者模式不同， RxJava 的事件回调方法除了普通事件 onNext() （相当于 onClick() / onEvent()）之外，还定义了两个特殊的事件：onCompleted() 和 onError()。
+
+- `onCompleted(): 事件队列完结。RxJava 不仅把每个事件单独处理，还会把它们看做一个队列。RxJava 规定，当不会再有新的 onNext() 发出时，需要触发 onCompleted() 方法作为标志。`
+- `onError(): 事件队列异常。在事件处理过程中出异常时，onError() 会被触发，同时队列自动终止，不允许再有事件发出。`
+- `在一个正确运行的事件序列中, onCompleted() 和 onError() 有且只有一个，并且是事件序列中的最后一个。需要注意的是，onCompleted() 和 onError() 二者也是互斥的，即在队列中调用了其中一个，就不应该再调用另一个。`
+
+![img](https:////upload-images.jianshu.io/upload_images/6970555-a57c5e45674a2d03.jpg?imageMogr2/auto-orient/strip|imageView2/2/w/599/format/webp)
+
+
+
+## 基本原理
+
+![img](https:////upload-images.jianshu.io/upload_images/6970555-7376baa93884dfe2.png?imageMogr2/auto-orient/strip|imageView2/2/w/580/format/webp)
+
+先假设有两个通道
+
+上面一根水管为事件产生的水管，叫它上游吧，下面一根水管为事件接收的水管叫它下游吧。
+
+两根水管通过一定的方式连接起来，使得上游每产生一个事件，下游就能收到该事件。注意这里和官网的事件图是反过来的, 这里的事件发送的顺序是先1,后2,后3这样的顺序, 事件接收的顺序也是先1,后2,后3的顺序, 我觉得这样更符合我们普通人的思维, 简单明了。
+
+这里的上游和下游就分别对应着RxJava中的Observable( 被观察者)和Observer(观察者)，它们之间的连接就对应着subscribe()，
+
+![img](https://upload-images.jianshu.io/upload_images/6970555-608a17f6aed9d1d3.png?imageMogr2/auto-orient/strip|imageView2/2/w/1200/format/webp)
+
+## 基本实现
+
+基于以上的概念， RxJava 的基本实现主要有三点：
+
+### 1、创建Observer：
+
+Observer 即观察者，它决定事件触发的时候将有怎样的行为。 RxJava 中的 Observer 接口的实现方式：
+
+```java
+   //创建一个下游  观察者Observer
+    Observer<Integer> observer = new Observer<Integer>() {
+        @Override
+        public void onSubscribe(Disposable d) {
+            Log.d(TAG, "subscribe");
+        }
+
+        @Override
+        public void onNext(Integer value) {
+            Log.d(TAG, "" + value);
+        }
+
+        @Override
+        public void onError(Throwable e) {
+            Log.d(TAG, "error");
+        }
+
+        @Override
+        public void onComplete() {
+            Log.d(TAG, "complete");
+        }
+    };
+```
+
+除了 Observer 接口之外，RxJava 还内置了一个实现了 Observer 的抽象类：Subscriber。 Subscriber 对 Observer 接口进行了一些扩展，但他们的基本使用方式是完全一样的：
+
+```java
+Subscriber<String> subscriber = new Subscriber<String>() {
+    @Override
+    public void onNext(String s) {
+        Log.d(tag, "Item: " + s);
+    }
+
+    @Override
+    public void onCompleted() {
+        Log.d(tag, "Completed!");
+    }
+
+    @Override
+    public void onError(Throwable e) {
+        Log.d(tag, "Error!");
+    }
+};
+```
+
+不仅基本使用方式一样，实质上，在 RxJava 的 subscribe 过程中，Observer 也总是会先被转换成一个 Subscriber 再使用。所以如果你只想使用基本功能，选择 Observer 和 Subscriber 是完全一样的。
+
+**它们的区别对于使用者来说主要有两点**
+
+- `onStart()`: 这是 Subscriber 增加的方法。它会在 subscribe 刚开始，而事件还未发送之前被调用，可以用于做一些准备工作，例如数据的清零或重置。这是一个可选方法，默认情况下它的实现为空。需要注意的是，如果对准备工作的线程有要求（例如弹出一个显示进度的对话框，这必须在主线程执行）， onStart() 就不适用了，因为它<font color=red>**总是在 subscribe 所发生的线程被调用，而不能指定线程**</font>。要在指定的线程来做准备工作，可以使用 `doOnSubscribe() `方法，具体可以在后面的文中看到。
+- `unsubscribe()`: 这是 Subscriber 所实现的另一个接口 Subscription 的方法，用于取消订阅。在这个方法被调用后，Subscriber 将不再接收事件。一般在这个方法调用前，可以**使用 `isUnsubscribed()` 先判断一下状态**。 unsubscribe() 这个方法很重要，因为在 subscribe() 之后， **Observable 会持有 Subscriber 的引用**，这个引用如果不能及时被释放，将有内存泄露的风险。所以最好保持一个原则：要在不再使用的时候尽快在合适的地方（例如 onPause() onStop() 等方法中）调用 unsubscribe() 来解除引用关系，以避免内存泄露的发生。
+
+### 2、创建Observable
+
+Observable 即被观察者，它决定什么时候触发事件以及触发怎样的事件。 RxJava 使用 create() 方法来创建一个 Observable ，并为它定义事件触发规则：
+
+```java
+   //创建一个上游  被观察者 Observable：
+    Observable<Integer> observable = Observable.create(new ObservableOnSubscribe<Integer>() {
+        @Override
+        public void subscribe(ObservableEmitter<Integer> emitter) throws Exception {
+            emitter.onNext(1);
+            emitter.onNext(2);
+            emitter.onNext(3);
+            emitter.onComplete();
+        }
+    });
+```
+
+### 3、Subscribe（订阅）
+
+创建了 Observable 和 Observer 之后，再用 subscribe() 方法将它们联结起来，整条链子就可以工作了。代码形式很简单：
+
+```java
+  //建立连接
+ observable.subscribe(observer);
+```
+
+这个运行的结果就是:
+
+```java
+08-29 17:34:01.648 3853-3853/tongxunlu.com.myapplication W/MainActivity: subscribe
+08-29 17:34:01.648 3853-3853/tongxunlu.com.myapplication W/MainActivity: 1
+08-29 17:34:01.648 3853-3853/tongxunlu.com.myapplication W/MainActivity: 2
+08-29 17:34:01.648 3853-3853/tongxunlu.com.myapplication W/MainActivity: 3
+08-29 17:34:01.648 3853-3853/tongxunlu.com.myapplication W/MainActivity: complete
+```
+
+> 注意: 只有当上游和下游建立连接之后, 上游才会开始发送事件. 也就是调用了subscribe() 方法之后才开始发送事件.
+
+把这段代码连起来写就成了RxJava的链式操作：
+
+```java
+    Observable.create(new ObservableOnSubscribe<Integer>() {
+        @Override
+        public void subscribe(ObservableEmitter<Integer> emitter) throws Exception {
+            emitter.onNext(1);
+            emitter.onNext(2);
+            emitter.onNext(3);
+            emitter.onComplete();
+        }
+    }).subscribe(new Observer<Integer>() {
+        @Override
+        public void onSubscribe(Disposable d) {
+            Log.d(TAG, "subscribe");
+        }
+
+        @Override
+        public void onNext(Integer value) {
+            Log.d(TAG, "" + value);
+        }
+
+        @Override
+        public void onError(Throwable e) {
+            Log.d(TAG, "error");
+        }
+
+        @Override
+        public void onComplete() {
+            Log.d(TAG, "complete");
+        }
+    });
+```
+
+#### 接下来解释一下其中两个陌生的玩意：ObservableEmitter和Disposable.
+
+**1、ObservableEmitter： Emitter是发射器的意思，那就很好猜了，这个就是用来发出事件的，它可以发出三种类型的事件，通过调用emitter的onNext(T value)、onComplete()和onError(Throwable error)就可以分别发出next事件、complete事件和error事件**
+
+但是，请注意，并不意味着你可以随意乱七八糟发射事件，需要满足一定的规则：
+
+- 上游可以发送无限个onNext, 下游也可以接收无限个onNext.
+- 当上游发送了一个onComplete后, 上游onComplete之后的事件将会继续发送, 而下游收到onComplete事件之后将不再继续接收事件.
+- 当上游发送了一个onError后, 上游onError之后的事件将继续发送, 而下游收到onError事件之后将不再继续接收事件.
+- 上游可以不发送onComplete或onError.
+- 最为关键的是onComplete和onError必须唯一并且互斥, 即不能发多个onComplete, 也不能发多个onError, 也不能先发一个onComplete, 然后再发一个onError, 反之亦然
+
+> 注: 关于onComplete和onError唯一并且互斥这一点, 是需要自行在代码中进行控制, 如果你的代码逻辑中违背了这个规则, **并不一定会导致程序崩溃. ** 比如发送多个onComplete是可以正常运行的, 依然是收到第一个onComplete就不再接收了, 但**若是发送多个onError, 则收到第二个onError事件会导致程序会崩溃**.
+
+以上几个规则用示意图表示如下:
+
+##### 只发送onNext事件
+
+![img](https://upload-images.jianshu.io/upload_images/6970555-b2d78b0d4c763b6d.png?imageMogr2/auto-orient/strip|imageView2/2/w/580/format/webp)
+
+##### 发送onComplete事件
+
+![img](https://upload-images.jianshu.io/upload_images/6970555-8d0f2fe01b0e4a3d.png?imageMogr2/auto-orient/strip|imageView2/2/w/595/format/webp)
+
+##### 发送onError事件
+
+![img](https://upload-images.jianshu.io/upload_images/6970555-f8155cb487beaad2.png?imageMogr2/auto-orient/strip|imageView2/2/w/595/format/webp)
+
+**2、接下来介绍Disposable, 这个单词的字面意思是一次性用品,用完即可丢弃的. 那么在RxJava中怎么去理解它呢, 对应于上面的水管的例子, 我们可以把它理解成两根管道之间的一个机关, 当调用它的dispose()方法时, 它就会将两根管道切断, 从而导致下游收不到事件.**
+
+> 注意: 调用dispose()并不会导致上游不再继续发送事件, 上游会继续发送剩余的事件.
+
+来看个例子, 我们让上游依次发送1,2,3,complete,4,在下游收到第二个事件之后, 切断水管, 看看运行结果:
+
+```java
+ Observable.create(new ObservableOnSubscribe<Integer>() {
+            @Override
+            public void subscribe(ObservableEmitter<Integer> emitter) throws Exception {
+                Log.d(TAG, "console--> 1");
+                emitter.onNext(1);
+                Log.d(TAG, "console--> 2");
+                emitter.onNext(2);
+                Log.d(TAG, "console--> 3");
+                emitter.onNext(3);
+                Log.d(TAG, "console--> complete");
+                emitter.onComplete();
+                Log.d(TAG, "console--> 4");
+                emitter.onNext(4);
+            }
+        }).subscribe(new Observer<Integer>() {
+            private Disposable mDisposable;
+            private int i;
+
+            @Override
+            public void onSubscribe(Disposable d) {
+                Log.d(TAG, "subscribe");
+                mDisposable = d;
+            }
+
+            @Override
+            public void onNext(Integer value) {
+                Log.d(TAG, "onNext: " + value);
+                i++;
+                if (i == 2) {
+                    Log.d(TAG, "dispose");
+                    mDisposable.dispose();
+                    Log.d(TAG, "isDisposed : " + mDisposable.isDisposed());
+                }
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                Log.d(TAG, "error");
+            }
+
+            @Override
+            public void onComplete() {
+                Log.d(TAG, "complete");
+            }
+        });
+
+```
+
+从运行结果我们看到, 在收到onNext 2这个事件后, 切断了水管, 但是上游仍然发送了3, complete, 4这几个事件, 但是在下游没有再接受，next没有打印3、4。 而且上游并没有因为发送了onComplete而停止. 同时可以看到下游的onSubscribe()方法是最先调用的.
+
+Disposable的用处不止这些, 后面讲解到了线程的调度之后, 我们会发现它的重要性. 随着后续深入的讲解, 我们会在更多的地方发现它的身影.
+
+#### 另外, subscribe()有多个重载的方法:
+
+```java
+public final Disposable subscribe() {}
+public final Disposable subscribe(Consumer<? super T> onNext) {}
+public final Disposable subscribe(Consumer<? super T> onNext, Consumer<? super Throwable> onError) {} 
+public final Disposable subscribe(Consumer<? super T> onNext, Consumer<? super Throwable> onError, Action onComplete) {}
+public final Disposable subscribe(Consumer<? super T> onNext, Consumer<? super Throwable> onError, Action onComplete, Consumer<? super Disposable> onSubscribe) {}
+public final void subscribe(Observer<? super T> observer) {}
+```
+
+最后一个带有Observer参数的我们已经使用过了,这里对其他几个方法进行说明.
+
+- 不带任何参数的subscribe() 表示下游不关心任何事件,你上游尽管发你的数据去吧, 下游不管你发什么.
+- 带有一个Consumer参数的方法表示下游只关心onNext事件, 其他的事件我假装没看见, 因此我们如果只需要onNext事件可以这么写:
+
+```java
+  Observable.create(new ObservableOnSubscribe<Integer>() {
+            @Override
+            public void subscribe(ObservableEmitter<Integer> emitter) throws Exception {
+                Log.d(TAG, "console--> 1");
+                emitter.onNext(1);
+                Log.d(TAG, "console--> 2");
+                emitter.onNext(2);
+                Log.d(TAG, "console--> 3");
+                emitter.onNext(3);
+                Log.d(TAG, "console--> complete");
+                emitter.onComplete();
+                Log.d(TAG, "console--> 4");
+                emitter.onNext(4);
+            }
+        }).subscribe(new Consumer<Integer>() {
+            @Override
+            public void accept(Integer integer) throws Exception {
+                Log.d(TAG, "onNext: " + integer);
+            }
+        });
+
+```
+
