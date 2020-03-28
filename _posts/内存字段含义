@@ -1,0 +1,149 @@
+# 内存字段含义
+
+参考：https://developer.android.com/studio/profile/investigate-ram?hl=zh-cn
+
+​		   https://www.jianshu.com/p/37539308ff32
+
+```
+adb shell dumpsys meminfo <package_name|pid> [-d]
+```
+
+-d 标志会打印与 Dalvik 和 ART 内存使用情况相关的更多信息。
+
+输出列出了应用的所有当前分配，单位为千字节。
+
+例子：
+
+```
+shell@zx1800:/ # dumpsys meminfo com.china_liantong.launcher -d                
+Applications Memory Usage (kB):
+Uptime: 2612261 Realtime: 2612261
+
+** MEMINFO in pid 884 [com.china_liantong.launcher] **
+                   Pss  Private  Private  Swapped     Heap     Heap     Heap
+                 Total    Dirty    Clean    Dirty     Size    Alloc     Free
+                ------   ------   ------   ------   ------   ------   ------
+  Native Heap     5915     5440        0        0    24576    16208     8367
+  Dalvik Heap    13764    13364        0        0    26989    20896     6093
+ Dalvik Other      248      248        0        0                           
+        Stack      513      512        0        0                           
+    Other dev        4        0        4        0                           
+     .so mmap     3392      424      472        0                           
+    .apk mmap       94        0        4        0                           
+    .ttf mmap     1573        0      568        0                           
+    .dex mmap     1188        0      752        0                           
+    .oat mmap     1419        0      260        0                           
+    .art mmap      979      616        0        0                           
+   Other mmap       80        4        0        0                           
+   EGL mtrack       17       17        0        0                           
+      Unknown      134      128        0        0                           
+        TOTAL    29320    20753     2060        0    51565    37104    14460
+
+ Objects
+               Views:     1192         ViewRootImpl:        1
+         AppContexts:        3           Activities:        1
+              Assets:        2        AssetManagers:        2
+       Local Binders:       41        Proxy Binders:      220
+       Parcel memory:        7         Parcel count:       14
+    Death Recipients:       10      OpenSSL Sockets:        0
+
+ SQL
+         MEMORY_USED:        0
+  PAGECACHE_OVERFLOW:        0          MALLOC_SIZE:        0
+```
+
+- 常驻内存大小 (**RSS**)：应用使用的共享和非共享页面的数量
+- 按比例分摊的内存大小 (**PSS**)：应用使用的非共享页面的数量加上共享页面的均匀分摊数量（例如，如果三个进程共享 3MB，则每个进程的 PSS 为 1MB）
+- 独占内存大小 (**USS**)：应用使用的非共享页面数量（不包括共享页面）
+
+| Item | 全称                  | 含义     | 等价                         |
+| :--- | :-------------------- | :------- | :--------------------------- |
+| USS  | Unique Set Size       | 物理内存 | 进程独占的内存               |
+| PSS  | Proportional Set Size | 物理内存 | PSS= USS+ 按比例包含共享库   |
+| RSS  | Resident Set Size     | 物理内存 | RSS= USS+ 包含共享库         |
+| VSS  | Virtual Set Size      | 虚拟内存 | VSS= RSS+ 未分配实际物理内存 |
+
+PSS 结果一个比较好的特性是，您可以将所有进程的 PSS 相加来确定所有进程正在使用的实际内存。这意味着 PSS 适合测定进程的实际 RAM 比重和比较其他进程的 RAM 使用情况与可用总 RAM。
+
+
+
+Private （clean 和 dirty）RAM
+
+这是仅由您的进程使用的内存。这是您的应用进程被被destory时系统可以回收的 RAM 量。通常情况下，最重要的部分是*Private* RAM，它的开销最大，因为只有您的进程使用它，而且其内容仅存在于 RAM 中，所以无法被分页以进行存储（因为 Android 不使用交换）。所有的 Dalvik 和您进行的原生堆分配都将是private dirty RAM；您与 Zygote 进程共享的 Dalvik 和原生分配是Shared dirty RAM。
+
+
+
+`Native Heap`: native分配占用的RAM, 通过malloc申请的内存（C++申请的内存）. `Heap Size` 是内存池总大小(向系统申请的内存大小). `Heap Alloc` 已经申请的内存大小(应用向dlmalloc申请的内存). `Heap Free` 内存池剩余可分配内存大小.
+
+`Dalvik Heap`: 应用中Dalvik分配占用的RAM（java申请的内存new）. `Pss Total`: 包含所有Zygote分配(通过进程间共享占用). `Private Dirty`: 仅分配到应用的实际RAM, 由应用分配或者zygote分配页, 这些页自从zygote fork应用进程后被修改过.
+
+> 例子：
+>
+> ```
+>                 Pss  Private  Private  SwapPss     Heap     Heap     Heap
+>               Total    Dirty    Clean    Dirty     Size    Alloc     Free
+>              ------   ------   ------   ------   ------   ------   ------
+> Native Heap     2737     2668        0        0     9728     8103     1624
+> Dalvik Heap      635      576        0        0     2736     1200     1536
+> ```
+>
+> 这里可以看到Native Heap Pss Total列是2737 也就是native代码中分配了2737KB的空间被占用 Heap Size列是9728，是指Native堆最大是这么多KB，后面还有Heap Alloc列是8103，这里是指在虚拟地址中分配了这么多空间，Dalvik Heap同理是指java中占用的空间，这里就奇怪了，<font color=red>Pss Total和Heap Allock为啥不一样</font>呢？
+> 用Demo来试验下：
+>
+> ```java
+> public class MainActivity extends AppCompatActivity {
+>  private long[] m_8MB;
+>  @Override
+>  protected void onCreate(Bundle savedInstanceState) {
+>      super.onCreate(savedInstanceState);
+>      setContentView(R.layout.activity_main);
+>      m_8MB = new long[1024*1024];
+>      for(int i = 0; i < 1024*1024/2; i++) {
+>          m_8MB[i] = 0l;
+>      }
+>  }
+> }
+> ```
+>
+> 如果没有for循环，只new long数组，不赋值，则：
+>
+> ```
+> ** MEMINFO in pid 6652 [personal.jayhou.meminfodemo] **
+>                 Pss  Private  Private  SwapPss     Heap     Heap     Heap
+>               Total    Dirty    Clean    Dirty     Size    Alloc     Free
+>              ------   ------   ------   ------   ------   ------   ------
+> Native Heap     2678     2608        0        0     8704     7725      978
+> Dalvik Heap      587      528        0        0    15534     9390     6144
+> ```
+>
+> Dalvik Heap的HeapSize调整为了15MB左右，HeapAlloc增加了8MB，正好是new long数组占用的空间，但是注意Pss Total并没有受到影响。
+> 如果加上for循环给long数组一半的元素赋值：
+>
+> ```
+> ** MEMINFO in pid 7099 [personal.jayhou.meminfodemo] **
+>                 Pss  Private  Private  SwapPss     Heap     Heap     Heap
+>               Total    Dirty    Clean    Dirty     Size    Alloc     Free
+>              ------   ------   ------   ------   ------   ------   ------
+> Native Heap     2658     2584        0        0     8704     7720      983
+> Dalvik Heap     4687     4628        0        0    15534     9390     6144
+> ```
+>
+> 可以看到Dalvik Heap下的Pss Total增加了4MB 其他没变。
+> **<font color=red>所以Pss Total是指占用了真实的物理内存的空间，而Heap Alloc只是占用的虚拟内存的空间。是分配了空间，没有使用的那部分内存。</font>**
+>
+> > 虚拟内存：进程空间内的虚拟内存地址，理论上32位cpu一个进程有4GB的虚拟内存可以使用。
+> > 物理内存：就是真正写的到内存条上的，真实地址对进程不可见，由操作系统把虚拟内存地址映射到物理内存地址。
+
+`.so map` 和 `.dex map`: mmap的`.so`和`.dex`(Dalvik或ART)代码占用的RAM. `Pss Total` 数值包括应用之间共享的平台代码；`Private Clean` 是您的应用自己的代码。通常情况下，实际映射的内存更大 - 此处的 RAM 仅为应用执行的代码当前所需的 RAM。不过，.so mmap 具有较大的私有脏 RAM，因为在加载到其最终地址时对原生代码进行了修改(GOT?!)。
+
+`.oat mmap`: 代码映像占用的 RAM 量，根据多个应用通常使用的预加载类计算。此文件在所有应用之间共享，不受特定应用影响。
+
+`.art mmap`: 堆占用的 RAM 量，根据多个应用通常使用的预加载类计算。此映像在所有应用之间共享，不受特定应用影响。尽管 ART 映像包含 Object 实例，它仍然不会计入您的堆大小。
+
+`Unknown`: 系统无法将其分类到其他更具体的一个项中的任何 RAM 页。 其 `Pss Total` 与 Zygote共享.
+
+`TOTAL`: 上方所有 PSS 字段的总和。表示您的进程占用的内存量占整体内存的比. `Private Dirty` 和 `Private Clean` 是您的进程中的总分配，未与其他进程共享。它们（尤其是 Private Dirty）等于您的进程被破坏后将释放回系统中的 RAM 量。`Dirty`因为已被修改而必须保持在 RAM 中的 RAM 页（因为没有交换）；`Clean` 是已从某个持久性文件（例如正在执行的代码）映射的 RAM 页，如果一段时间不用，可以移出分页。
+
+`ViewRootImpl`: 进程中当前活动的根视图数量。每个根视图都与一个窗口关联，因此有助于确定涉及对话框或其他窗口的内存泄漏。
+
+`AppContexts` 和 `Activities`: 当前活动的应用 Context 和 Activity 对象数量。快速确定由于存在静态引用（比较常见）而无法进行垃圾回收的已泄漏 Activity 对象。这些对象经常拥有很多关联的其他分配，因此成为跟踪大型内存泄漏的一种不错的方式。
