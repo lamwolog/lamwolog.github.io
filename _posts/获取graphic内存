@@ -1,0 +1,70 @@
+# 获取Graphic内存
+
+```java
+private void getProcess(){
+        ActivityManager manager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        if(null!= manager){
+            List<ActivityManager.RunningAppProcessInfo> processInfos = manager.getRunningAppProcesses();
+            for(ActivityManager.RunningAppProcessInfo info : processInfos){
+                if(null != info ){//&& TextUtils.equals(info.processName,"com.vivo.assistant") ){
+                    Log.d("lwl", "name = " + info.processName);
+                    Log.d("lwl", "pid = " + info.pid);
+                    Log.d("lwl", "uid = " + info.uid);
+                    Debug.MemoryInfo[] memoryInfos = manager.getProcessMemoryInfo(new int[] {info.pid});
+                    Log.d("lwl","nativePss = "+ memoryInfos[0].nativePss);
+                    Log.d("lwl", "totalPss = " + memoryInfos[0].getTotalPss());
+                    Log.d("lwl", "nativePrivateDirty = " +  memoryInfos[0].nativePrivateDirty);
+                    Map<String , String> states = memoryInfos[0].getMemoryStats();
+                    for(Map.Entry<String , String> entry : states.entrySet()){
+                        Log.d("lwl", entry.getKey() + " = " + entry.getValue() );
+                    }
+                    /**
+                     * 获取Graphic内存
+                     */
+                    try{
+
+                        Class debugClass = Class.forName("android.os.Debug$MemoryInfo");
+                        Method GlDevMethod = debugClass.getMethod("getOtherPrivate", int.class);
+                        Method otherPrivateClean = debugClass.getMethod("getOtherPrivateClean", int.class);
+                        Method otherPrivateDirty = debugClass.getMethod("getOtherPrivateDirty", int.class);
+                        Method set = debugClass.getMethod("set", Debug.MemoryInfo.class);
+
+                        GlDevMethod.setAccessible(true);
+                        Constructor debug = debugClass.getConstructors()[0];
+                        Object object = debug.newInstance();
+
+                        Log.d("lwl", "debug Constructor: "+debug);
+                        //初始化数据
+                        set.invoke(object,memoryInfos[0]);
+                        Log.d("lwl", "OTHER_GL_DEV = "+GlDevMethod.invoke(object,4));
+                        Log.d("lwl", "OTHER_GL_DEV otherPrivateClean= "+otherPrivateClean.invoke(object,4));
+                        Log.d("lwl", "OTHER_GL_DEV otherPrivateDirty= "+otherPrivateDirty.invoke(object,4));
+                        Log.d("lwl", "OTHER_GRAPHICS = "+GlDevMethod.invoke(object,14));
+                        Log.d("lwl", "OTHER_GRAPHICS otherPrivateClean= "+otherPrivateClean.invoke(object,14));
+                        Log.d("lwl", "OTHER_GRAPHICS otherPrivateDirty= "+otherPrivateDirty.invoke(object,14));
+                        Log.d("lwl", "OTHER_GL = "+GlDevMethod.invoke(object,15));
+                        Log.d("lwl", "OTHER_GL otherPrivateClean= "+otherPrivateClean.invoke(object,15));
+                        Log.d("lwl", "OTHER_GL otherPrivateDirty= "+otherPrivateDirty.invoke(object,15));
+
+
+                    } catch (Exception e){
+                        Log.d("lwl", "getProcess: exception="+e.getMessage());
+                        e.printStackTrace();
+                    }
+
+                }
+            }
+        }
+    }
+```
+
+> 这里需要注意反射生成DeBug实例时，需要调用一下set方法，不然是个空对象，获取到的graphic内存都为0
+
+## 字段含义
+
+| OTHER_GL_DEV——Gfx dev                                        |      | OTHER_GRAPHICS——EGL mtrack |      | OTHER_GL——GL mtrack |      |
+| ------------------------------------------------------------ | ---- | -------------------------- | ---- | ------------------- | ---- |
+| otherPrivateClean：<br>已经映射持久文件使用的内存页（例如正在被执行的代码），因此一段时间不使用的话就可以置换出去 <br> 它包括该进程独自使用的so和dex。Clean内存的好处是在内存紧张时，可以释放物理内存。因为是clean的，所以不需要写回到disk，只需要下次读取该内存（导致缺页错误）时再从disk读入。<br/>  关于so库的加载，第一次是以MAP_PRIVATE参数 mmap so，内存都是private clean的。如果另外一个进程mmap了同一个so，就变成shared clean了。 |      | otherPrivateClean          |      | otherPrivateClean   |      |
+| otherPrivateDirty：<br>应用独占的内存大小，只被自己进程使用，dirty内存是已经被修改的内存页，因此必须常驻内存（因为没有swap）,只在内存中存储，因此不能做分页存储到外存（Android不支持swap）<br> 它是app自己提交的内存总数，包含了app自己**主动申请**的和**修改了的继承自Zygote的内存**。  其实，Private Dirty表示了该进程私有的，不跟disk数据一致的内存段。例如堆（heap)，栈（stack），bss段。<br> PrivateDirty 是应用独占内存大小，包含独自分配的部分和应用进程从Zygote复制时被修改的Zygote分配的内存页。 |      | otherPrivateDirty          |      | otherPrivateDirty   |      |
+
+> 这里做下说明，android下所有app的进程均是fork自Zygote，从Zygote进程 fork 时，子进程完全拷贝了Zygote进程的虚拟内存空间(包括加载的so占用、resource资源占用、主动申请等内存空间等)。但当继承自Zygote进程的内存被修改时，由于copy-on-write，会申请新的内存空间，这就会形成Private Dirty内存。当继承自Zygote进程的内存没被修改时，是不用分配额外的内存空间。
