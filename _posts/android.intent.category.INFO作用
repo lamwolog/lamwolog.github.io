@@ -1,5 +1,0 @@
-# android.intent.category.INFO作用
-
-
-
-使用<kbd>android.intent.category.INFO</kbd>代替LAUNCHER ，Google Play安装完成时，屏幕会显示有两个选项“完成”和“打开”，按下“打开”将打开带有<kbd>INFO</kbd>category的Activity。并且可以覆盖activities的<kbd>android.intent.category.LAUNCHER</kbd>属性，所以只有在app没有桌面启动图标时使用
