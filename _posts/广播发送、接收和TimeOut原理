@@ -1,0 +1,869 @@
+# 广播发送、接收和TimeOut原理
+
+BroadcastReceiver其核心机制是基于Bind的IPC通信，一个广播接收者要想接收到广播，必须注册到AMS中，在AMS中有ReceiverList保存注册的广播接收者。发送广播到AMS时候，AMS会查找相应的BroadcastFilter，匹配就会调用相应的远程Binder代理对象通知Client端，最终由Client端的主线程来执行MyReceiver里面的onReceiver（）方法。发送广播的又分为有序和无序，无序一定是动态注册的，而有序可能是动态注册的也可能是静态注册的。静态注册的广播，那怕是没有启动，如果AMS递送相关广播，则会先启动该进程然后递送。
+
+时序图：
+
+![img](https://upload-images.jianshu.io/upload_images/5328002-3eae00f5d9ef6ce3.jpg?imageMogr2/auto-orient/strip|imageView2/2/w/1106/format/webp)
+
+1、`ContextImpl`中发送广播
+
+```java
+@Override
+    public void sendBroadcast(Intent intent) {
+        warnIfCallingFromSystemProcess();
+        String resolvedType = intent.resolveTypeIfNeeded(getContentResolver());
+        try {
+            intent.prepareToLeaveProcess(this);
+            //和注册BroadcastReceiver一样拿到AMS代理对象调用ActivityManagerProxy里面的broadcastIntent。
+            ActivityManager.getService().broadcastIntent(
+                    mMainThread.getApplicationThread(), intent, resolvedType, null,
+                    Activity.RESULT_OK, null, null, null, AppOpsManager.OP_NONE, null, false, false,
+                    getUserId());
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+```
+
+以下代码运行在`ActivityManagerProxy`中：
+
+```java
+ public int broadcastIntent(IApplicationThread caller,
+            Intent intent, String resolvedType, IIntentReceiver resultTo,
+            int resultCode, String resultData, Bundle map,
+            String[] requiredPermissions, int appOp, Bundle options, boolean serialized,
+            boolean sticky, int userId) throws RemoteException
+    {
+
+        //和注册广播时候一样，把要发送的数据打包成Parcel对象data 
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        data.writeInterfaceToken(IActivityManager.descriptor);
+        data.writeStrongBinder(caller != null ? caller.asBinder() : null);
+        intent.writeToParcel(data, 0);
+        data.writeString(resolvedType);
+        data.writeStrongBinder(resultTo != null ? resultTo.asBinder() : null);
+        data.writeInt(resultCode);
+        data.writeString(resultData);
+        data.writeBundle(map);
+        data.writeStringArray(requiredPermissions);
+        data.writeInt(appOp);
+        data.writeBundle(options);
+        data.writeInt(serialized ? 1 : 0);
+        data.writeInt(sticky ? 1 : 0);
+        data.writeInt(userId);        
+        //发送数据到AMS，（线程从ClientThread切换到BinderThread）
+        mRemote.transact(BROADCAST_INTENT_TRANSACTION, data, reply, 0);
+        reply.readException();
+        int res = reply.readInt();
+        reply.recycle();
+        data.recycle();
+        return res;
+    }
+```
+
+接下来会执行到AMS中的`broadcastIntent()`。
+
+2、`ActivityManagerService`里面的`broadcastIntent()`
+
+```java
+public final int broadcastIntent(IApplicationThread caller,
+            Intent intent, String resolvedType, IIntentReceiver resultTo,
+            int resultCode, String resultData, Bundle resultExtras,
+            String[] requiredPermissions, int appOp, Bundle bOptions,
+            boolean serialized, boolean sticky, int userId) {
+        enforceNotIsolatedCaller("broadcastIntent");
+        synchronized(this) {
+            //验证广播intent是否有效
+            intent = verifyBroadcastLocked(intent);
+
+            //获取调用者进程记录对象
+            final ProcessRecord callerApp = getRecordForAppLocked(caller);
+            final int callingPid = Binder.getCallingPid();
+            final int callingUid = Binder.getCallingUid();
+
+            final long origId = Binder.clearCallingIdentity();
+            try {
+                //调用broadcastIntentLocked发送广播
+                return broadcastIntentLocked(callerApp,
+                        callerApp != null ? callerApp.info.packageName : null,
+                        intent, resolvedType, resultTo, resultCode, resultData, resultExtras,
+                        requiredPermissions, appOp, bOptions, serialized, sticky,
+                        callingPid, callingUid, callingUid, callingPid, userId);
+            } finally {
+                Binder.restoreCallingIdentity(origId);
+            }
+        }
+    }
+
+```
+
+3、接着调用AMS中的`broadcastIntentLocked()`，该方法主要用来查找目标广播接收者。
+
+```java
+ final int broadcastIntentLocked(ProcessRecord callerApp,
+            String callerPackage, Intent intent, String resolvedType,
+            IIntentReceiver resultTo, int resultCode, String resultData,
+            Bundle resultExtras, String[] requiredPermissions, int appOp, Bundle bOptions,
+            boolean ordered, boolean sticky, int callingPid, int callingUid, int userId) {
+        intent = new Intent(intent);
+         // 增加该标志，则广播不会发送到已停止的package。默认的广播,不发给进程关闭的app,以前可以监听广播来唤醒自己.安卓改版后加了这标记就不能实现了。
+     	//如果加的是FLAG_INCLUDE_STOPPED_PACKAGES 就可以启动已死亡app
+        intent.addFlags(Intent.FLAG_EXCLUDE_STOPPED_PACKAGES);
+ 
+ 
+        // 当没有启动完成，不允许启动新的进程
+        if (!mProcessesReady && (intent.getFlags()&Intent.FLAG_RECEIVER_BOOT_UPGRADE) == 0) {
+            intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
+        }
+        .............
+        //获取userID
+        userId = mUserController.handleIncomingUser(callingPid, callingUid, userId, true,
+                ALLOW_NON_FULL, "broadcast", callerPackage);
+     
+        .............//处理特殊广播和粘性广播
+ 
+ 
+        int[] users;
+        if (userId == UserHandle.USER_ALL) {
+            users = mUserController.getStartedUserArrayLocked();//广播给所有已启动用户
+        } else {
+            users = new int[] {userId};//广播给指定用户
+        }
+ 
+ 
+        List receivers = null;//记录着匹配当前intent的所有静态注册广播接收者；
+        List<BroadcastFilter> registeredReceivers = null;//记录着匹配当前的所有动态注册的广播接收者
+     	//为了处理“串行广播”和“并行广播”，broadcastIntentLocked()方法中搞了两个list，一个是receivers，另一个是registeredReceivers,registeredReceivers是动态广播接收器列表 ，receivers是静态广播接收器列表 。collectReceiverComponents内部调用包管理器的queryIntentReceivers()接口，查询出和intent匹配的所有静态receivers，此时所返回的查询结果本身已经排好序了，因此，该返回值被直接赋值给了receivers变量
+        //找出所有能接收该广播的receivers
+        if ((intent.getFlags()&Intent.FLAG_RECEIVER_REGISTERED_ONLY)
+                 == 0) {
+           //根据intent查找相应的receivers
+            receivers = collectReceiverComponents(intent, resolvedType, callingUid, users);
+        }
+ 
+ 
+        if (intent.getComponent() == null) {
+            if (userId == UserHandle.USER_ALL && callingUid == Process.SHELL_UID) {
+                // Query one target user at a time, excluding shell-restricted users
+                for (int i = 0; i < users.length; i++) {
+                    if (mUserController.hasUserRestriction(
+                            UserManager.DISALLOW_DEBUGGING_FEATURES, users[i])) {
+                        continue;
+                    }
+                   // 查询动态注册的广播,这个列表是没有排序的
+                    List<BroadcastFilter> registeredReceiversForUser =
+                            mReceiverResolver.queryIntent(intent,
+                                    resolvedType, false, users[i]);
+                    if (registeredReceivers == null) {
+                        registeredReceivers = registeredReceiversForUser;
+                    } else if (registeredReceiversForUser != null) {
+                        registeredReceivers.addAll(registeredReceiversForUser);
+                    }
+                }
+            } else {
+                // 查询动态注册的广播
+                registeredReceivers = mReceiverResolver.queryIntent(intent,
+                        resolvedType, false, userId);
+            }
+        }
+ 
+ 
+        //是否需要替换现已存在的广播
+        final boolean replacePending =
+                (intent.getFlags()&Intent.FLAG_RECEIVER_REPLACE_PENDING) != 0;
+        ......
+        //开始处理并行广播
+       	//非有序广播，并且是动态注册的广播，则将广播记录添加到并行广播队列中，这样动态注册的广播将并行执行。
+        int NR = registeredReceivers != null ? registeredReceivers.size() : 0;
+     	//参数ordered标记当前发送的广播是否是有序广播，可以看到如果发送的是无序广播，进入的是并行广播队列
+        if (!ordered && NR > 0) {
+            .......
+            //根据Intent中的标志位FLAG_RECEIVER_FOREGROUND决定返回前台广播队列还是后台广播队列，见4
+            final BroadcastQueue queue = broadcastQueueForIntent(intent);
+            //创建广播记录
+            BroadcastRecord r = new BroadcastRecord(queue, intent, callerApp,
+                    callerPackage, callingPid, callingUid, resolvedType, requiredPermissions,
+                    appOp, brOptions, registeredReceivers, resultTo, resultCode, resultData,
+                    resultExtras, ordered, sticky, false, userId);
+            if (DEBUG_BROADCAST) Slog.v(TAG_BROADCAST, "Enqueueing parallel broadcast " + r);
+            //是否需要替换现有广播记录
+            final boolean replaced = replacePending && queue.replaceParallelBroadcastLocked(r);
+            if (!replaced) {
+                //将广播记录添加到并行广播队列中，见5
+                queue.enqueueParallelBroadcastLocked(r);
+                //开始处理广播队列的广播，见6
+                queue.scheduleBroadcastsLocked();
+            }
+            //将动态注册的广播接收者设置为空
+            registeredReceivers = null;
+            NR = 0;
+        }
+ 
+ 		.......//处理静态广播
+        int ir = 0;
+        ........//合并静态广播和动态广播优先级，加入到receivers中
+       
+       // 处理串行广播
+        if ((receivers != null && receivers.size() > 0)
+                || resultTo != null) {
+            //根据Intent中的标志位FLAG_RECEIVER_FOREGROUND决定返回前台广播队列还是后台广播队列，见4
+            BroadcastQueue queue = broadcastQueueForIntent(intent);
+            BroadcastRecord r = new BroadcastRecord(queue, intent, callerApp,
+                    callerPackage, callingPid, callingUid, resolvedType,
+                    requiredPermissions, appOp, brOptions, receivers, resultTo, resultCode,
+                    resultData, resultExtras, ordered, sticky, false, userId);
+            ......
+            //是否需要替换现已存在的广播
+            boolean replaced = replacePending && queue.replaceOrderedBroadcastLocked(r);
+            if (!replaced) {
+                //将静态注册的广播添加到串行广播队列中，见5
+                queue.enqueueOrderedBroadcastLocked(r);
+                //开始处理广播队列的广播，见6
+                queue.scheduleBroadcastsLocked();
+            }
+        } else {
+            .......
+        }
+ 
+ 
+        return ActivityManager.BROADCAST_SUCCESS;//返回发送广播成功的标志
+    }
+```
+
+对于粘性广播是在注册过程处理的，创建`BroadcastRecord`对象；并添加到`mParallelBroadcasts`队列；
+ 然后执行`queue.scheduleBroadcastsLocked`进行处理
+
+对于无序广播(并行)： 动态注册的广播会进入`mRegisteredReceivers`表，会创建`BroadcastRecord`对象，并添加到`mParallelBroadcasts`队列；然后执行`queue.scheduleBroadcastsLocked`;
+
+对于所有静态注册的广播和动态注册的有序广播会进入receivers表中（串行），会创建`BroadcastRecord`对象，并添加到`mOrderedBroadcasts`队列；然后执行`queue.scheduleBroadcastsLocked`
+
+4、根据中`Intent.FLAG_RECEIVER_FOREGROUND`标志位决定是使用前台广播队列还是后台广播队列
+
+```java
+    BroadcastQueue broadcastQueueForIntent(Intent intent) {
+        final boolean isFg = (intent.getFlags() & Intent.FLAG_RECEIVER_FOREGROUND) != 0;
+        ......
+        return (isFg) ? mFgBroadcastQueue : mBgBroadcastQueue;
+    }
+ 
+ 
+    BroadcastQueue mFgBroadcastQueue;//前台广播队列
+    BroadcastQueue mBgBroadcastQueue;//后台广播队列
+    mFgBroadcastQueue = new BroadcastQueue(this, mHandler,
+                "foreground", BROADCAST_FG_TIMEOUT, false);
+    mBgBroadcastQueue = new BroadcastQueue(this, mHandler,
+                "background", BROADCAST_BG_TIMEOUT, true);
+    static final int BROADCAST_FG_TIMEOUT = 10*1000;//前台广播超时时间为10s
+    static final int BROADCAST_BG_TIMEOUT = 60*1000;//后台广播超时时间为60s
+```
+
+前台广播队列和后台广播队列有两个不同对方，一个是超时时间，另外一个是`allowDelayBehindServices`参数，前台广播是false，表示不等待。后台广播是true，表示要等待。
+
+5、在BroadcastQueue中会有将广播添加到广播队列的操作
+
+```java
+ 　public void enqueueParallelBroadcastLocked(BroadcastRecord r) {
+        mParallelBroadcasts.add(r);
+        r.enqueueClockTime = System.currentTimeMillis();
+    }
+    /*
+    * 并行广播队列，所有的广播都立即执行，不用等待其它广播执行完成。
+    * 后台和前台广播是分开维护的。
+    */
+    final ArrayList<BroadcastRecord> mParallelBroadcasts = new ArrayList<>();
+```
+
+```java
+ public void enqueueOrderedBroadcastLocked(BroadcastRecord r) {
+        mOrderedBroadcasts.add(r);
+        r.enqueueClockTime = System.currentTimeMillis();
+    }
+    /*
+    * 串行广播队列，在一个时间内只能执行一个广播，只能等待列表中前一个广播执行完成了，才能执行下       
+    * 一个广播。
+    * 前台广播和后台广播也是分开维护的。
+    */
+    final ArrayList<BroadcastRecord> mOrderedBroadcasts = new ArrayList<>();
+```
+
+6、`scheduleBroadcastsLocked`方法（BroadcastQueue.java）
+
+```java
+public void scheduleBroadcastsLocked() {
+        ......
+        //mBroadcastsScheduled是AMS的一个成员变量，用来记录AMS是否已经向其所在线程的消息队列发过一条BROADCAST_INTENT_MSG的消息。如果为true说明AMS所在消息队列已经有一个BROADCAST_INTENT_MSG的消息，反之则调用mHandler发送该条消息到AMS所在线程消息队列。最后将mBroadcastsScheduled 设置为true，表明该广播已经成功发送出去了
+        //（这个阶段广播只是被发送到了AMS所在线程的消息队列，并没有真正到广播接收者手中，也就是表明当广播被发送到AMS的时候系统会认为广播已经发送成功）。
+        if (mBroadcastsScheduled) {
+            return;
+        }
+        //发送BROADCAST_INTENT_MSG消息
+        mHandler.sendMessage(mHandler.obtainMessage(BROADCAST_INTENT_MSG, this));
+        mBroadcastsScheduled = true;
+    }
+ 
+ 
+    public void handleMessage(Message msg) {
+            switch (msg.what) {
+                //调用processNextBroadcast来处理类型为BROADCAST_INTENT_MSG的消息
+                case BROADCAST_INTENT_MSG: {
+                    if (DEBUG_BROADCAST) Slog.v(
+                            TAG_BROADCAST, "Received BROADCAST_INTENT_MSG");
+                    processNextBroadcast(true);
+                } break;
+            }
+    }
+```
+
+7、在BroadcastQueue中查看`processNextBroadcast`，`processNextBroadcast`方法首先处理并行广播，然后处理串行广播，并设置广播超时时间，最后获取下条串行广播，并处理串行广播。
+
+```java
+final void processNextBroadcast(boolean fromMsg) {
+        synchronized(mService) {
+            BroadcastRecord r;
+            ......
+            mService.updateCpuStats();//更新CPU的状态信息
+ 
+ 		   //fromMsg表示是否为BROADCAST_INTENT_MSG类型的消息
+            if (fromMsg) {
+                mBroadcastsScheduled = false;//将mBroadcastsScheduled变量置为false，让后面的广播可以执行
+            }
+ 
+ 
+            // 1.首先处理并行广播
+            while (mParallelBroadcasts.size() > 0) {
+                r = mParallelBroadcasts.remove(0);
+                r.dispatchTime = SystemClock.uptimeMillis();
+                r.dispatchClockTime = System.currentTimeMillis();
+                final int N = r.receivers.size();//获取广播接收者的数目
+                .......
+                for (int i=0; i<N; i++) {
+                    Object target = r.receivers.get(i);
+                    ........
+                    //分发广播给已注册的receivers
+                    deliverToRegisteredReceiverLocked(r, (BroadcastFilter)target, false, i);//见12
+                }
+                // 添加广播到广播的历史统计中
+                addBroadcastToHistoryLocked(r);
+                .......
+            }
+ 
+ 
+ 
+ 
+            // 2.处理串行广播
+           .......
+            boolean looped = false;
+ 
+ 
+            do {
+                //所有的串行广播都执行完成了，则调度执行gc
+                if (mOrderedBroadcasts.size() == 0) {
+                    mService.scheduleAppGcsLocked();
+                    if (looped) {
+                        //执行完最后一个串行广播后，确保所有进程的OomAdj都是正确的
+                        mService.updateOomAdjLocked();
+                    }
+                    return;
+                }
+                //获取串行广播队列中的第一个元素，while循环当r！=null的时候跳出循环，这时候下一个需要处理的广播就保存在r中，这时候AMS就对其进行处理 ，同样调用到方法deliverToRegisteredReceiverLocked(r, filter, r.ordered);
+                r = mOrderedBroadcasts.get(0);
+ 
+ 
+                ......
+ 
+ 
+                //没有更多的接收者来处理该广播了
+                if (r.receivers == null || r.nextReceiver >= numReceivers
+                        || r.resultAbort || forceReceive) {
+ 
+ 
+                    ......
+                    //取消广播超时，见11
+                    cancelBroadcastTimeoutLocked();
+ 
+ 
+                   .........
+                    //将广播从串行广播列表中移除
+                    mOrderedBroadcasts.remove(0);
+                    r = null;
+                    looped = true;
+                    continue;
+                }
+            } while (r == null);
+ 
+ 
+            // 3.获取下条有序广播
+            // 获取下一个接收者的index
+            int recIdx = r.nextReceiver++;
+ 
+ 
+            //跟踪记录receiver开始处理广播的时间，这样可以发送一个Timeout消息避免超时
+            r.receiverTime = SystemClock.uptimeMillis();
+            if (recIdx == 0) {
+                r.dispatchTime = r.receiverTime;//记录首个接收执行该广播的开始时间
+                r.dispatchClockTime = System.currentTimeMillis();
+                ......
+            }
+            if (! mPendingBroadcastTimeoutMessage) {
+                //广播超时时间
+                long timeoutTime = r.receiverTime + mTimeoutPeriod;
+                .......
+                //设置广播超时时间，发送BROADCAST_TIMEOUT_MSG消息，这样超时后就产生ANR信息，见8
+                setBroadcastTimeoutLocked(timeoutTime);
+            }
+ 
+ 
+            final BroadcastOptions brOptions = r.options;
+            // 获取下一个广播接收者
+            final Object nextReceiver = r.receivers.get(recIdx);
+            //对于动态注册的广播接收者，则交由deliverToRegisteredReceiverLocked函数处理
+            if (nextReceiver instanceof BroadcastFilter) {
+ 
+ 
+                BroadcastFilter filter = (BroadcastFilter)nextReceiver;
+                ......
+                deliverToRegisteredReceiverLocked(r, filter, r.ordered, recIdx);
+                if (r.receiver == null || !r.ordered) {
+                    ........
+                    r.state = BroadcastRecord.IDLE;
+               //该广播已经处理完成了，接着处理下一个广播
+                    scheduleBroadcastsLocked();
+                } else {
+                    ......
+                }
+                return;
+            }
+ 
+ 
+            // 对于静态注册的广播接收者
+            ResolveInfo info =  (ResolveInfo)nextReceiver;
+            ComponentName component = new ComponentName(
+                    info.activityInfo.applicationInfo.packageName,
+                    info.activityInfo.name);
+ 
+ 
+            .......
+            int perm = mService.checkComponentPermission(info.activityInfo.permission,
+                    r.callingPid, r.callingUid, info.activityInfo.applicationInfo.uid,
+                    info.activityInfo.exported);
+ 
+ 
+            ......
+ 
+ 
+            final int receiverUid = info.activityInfo.applicationInfo.uid;
+            String targetProcess = info.activityInfo.processName;
+            ProcessRecord app = mService.getProcessRecordLocked(targetProcess,
+                    info.activityInfo.applicationInfo.uid, false);
+             ..........
+             //执行各种权限检测，此处省略，当权限不满足时skip=true
+            //跳过执行该广播
+            if (skip) {
+                r.delivery[recIdx] = BroadcastRecord.DELIVERY_SKIPPED;
+                r.receiver = null;
+                r.curFilter = null;
+                r.state = BroadcastRecord.IDLE;
+                scheduleBroadcastsLocked();
+                return;
+            }
+ 
+ 
+            .......
+            r.delivery[recIdx] = BroadcastRecord.DELIVERY_DELIVERED;
+            r.state = BroadcastRecord.APP_RECEIVE;
+            r.curComponent = component;
+            r.curReceiver = info.activityInfo;
+            .........
+            // 4.处理下条有序广播
+            // receiver是否已经启动运行了，如果已经启动了，则处理该广播
+            if (app != null && app.thread != null) {
+                try {
+                    app.addPackage(info.activityInfo.packageName,
+                            info.activityInfo.applicationInfo.versionCode, mService.mProcessStats);
+                    processCurBroadcastLocked(r, app);//处理当前广播
+                    return;
+                } catch (RemoteException e) {
+                    .....
+            }
+ 
+ 
+            //如果receiver所对应的进程尚未启动，则创建该进程
+            .....
+            if ((r.curApp=mService.startProcessLocked(targetProcess,
+                    info.activityInfo.applicationInfo, true,
+                    r.intent.getFlags() | Intent.FLAG_FROM_BACKGROUND,
+                    "broadcast", r.curComponent,
+                    (r.intent.getFlags()&Intent.FLAG_RECEIVER_BOOT_UPGRADE) != 0, false, false))
+                            == null) {
+               
+                //如果receiver启动失败，则结束该receiver
+                ......
+                logBroadcastReceiverDiscardLocked(r);
+                finishReceiverLocked(r, r.resultCode, r.resultData,
+                        r.resultExtras, r.resultAbort, false);
+                scheduleBroadcastsLocked();
+                r.state = BroadcastRecord.IDLE;
+                return;
+            }
+ 
+ 
+            mPendingBroadcast = r;
+            mPendingBroadcastRecvIndex = recIdx;
+        }
+    }
+```
+
+8、设置广播的超时时间`setBroadcastTimeoutLocked`
+
+```java
+  /*
+    * 设置广播超时时间
+    */
+    final void setBroadcastTimeoutLocked(long timeoutTime) {
+        if (! mPendingBroadcastTimeoutMessage) {
+            Message msg = mHandler.obtainMessage(BROADCAST_TIMEOUT_MSG, this);
+            //发送BROADCAST_TIMEOUT_MSG消息
+            mHandler.sendMessageAtTime(msg, timeoutTime);
+            mPendingBroadcastTimeoutMessage = true;
+        }
+    }
+    public void handleMessage(Message msg) {
+            switch (msg.what) {
+                .....
+                case BROADCAST_TIMEOUT_MSG: {
+                    synchronized (mService) {
+                        broadcastTimeoutLocked(true);
+                    }
+                } break;
+                .......
+            }
+        }
+```
+
+9、`broadcastTimeoutLocked`流程如下
+
+```java
+ final void broadcastTimeoutLocked(boolean fromMsg) {
+        if (fromMsg) {
+            mPendingBroadcastTimeoutMessage = false;
+        }
+ 
+ 
+        //如果有序广播列表为空，则停止发送ANR消息
+        if (mOrderedBroadcasts.size() == 0) {
+            return;
+        }
+ 
+ 
+        long now = SystemClock.uptimeMillis();
+        //获取当前处理的广播
+        BroadcastRecord r = mOrderedBroadcasts.get(0);
+        if (fromMsg) {
+            ......
+            //如果应用进程还未启动，则直接返回，广播超时只对已经启动的应用有效
+            if (!mService.mProcessesReady) {
+                return;
+            }
+ 
+ 
+            //广播开始接收处理时间 + 超时时间（前台广播10s，后台广播60s）
+            long timeoutTime = r.receiverTime + mTimeoutPeriod;
+            //如果没有超时，则启动一下一个超时广播信息,超时时间没有改变
+            if (timeoutTime > now) {
+                .....
+                setBroadcastTimeoutLocked(timeoutTime);
+                return;
+            }
+        }
+ 
+ 
+        //下面是处理广播超时的
+        BroadcastRecord br = mOrderedBroadcasts.get(0);
+        .....
+        //更新广播开始接收处理时间为当前时间
+        r.receiverTime = now;
+        r.anrCount++;
+        .......
+        ProcessRecord app = null;
+        String anrMessage = null;
+ 
+ 
+        Object curReceiver = r.receivers.get(r.nextReceiver-1);
+        r.delivery[r.nextReceiver-1] = BroadcastRecord.DELIVERY_TIMEOUT;
+        logBroadcastReceiverDiscardLocked(r);
+        if (curReceiver instanceof BroadcastFilter) {
+         ......
+        } else {
+            app = r.curApp;
+        }
+ 
+ 
+        if (app != null) {
+            //获取超时的信息
+            anrMessage = "Broadcast of " + r.intent.toString();
+        }
+ 
+ 
+        .......
+ 
+ 
+        //下一个广播接收者处理
+        finishReceiverLocked(r, r.resultCode, r.resultData,
+                r.resultExtras, r.resultAbort, false);
+        scheduleBroadcastsLocked();
+ 
+ 
+        //将ANR信息发送到AppErrors中处理
+        if (anrMessage != null) {
+            mHandler.post(new AppNotResponding(app, anrMessage)); //见10
+        }
+    }
+```
+
+10、在`broadcastTimeoutLocked`方法中，将投递ANR的信息投递到AppErrors中处理。
+
+```java
+ private final class AppNotResponding implements Runnable {
+        private final ProcessRecord mApp;
+        private final String mAnnotation;
+ 
+        public AppNotResponding(ProcessRecord app, String annotation) {
+            mApp = app;
+            mAnnotation = annotation;
+        }
+ 
+ 
+        @Override
+        public void run() {
+            mService.mAppErrors.appNotResponding(mApp, null, null, false, mAnnotation);
+        }
+    }
+```
+
+11、至此，Broadcast Timeout流程介绍完成了，可以看到在开始处理串行广播时，设置一个timeout超时时间，然后通过`mHandler.sendMessageAtTime(msg, timeoutTime)`方法，来控制发送ANR消息。如果串行广播执行没有超时的话，则会通过`cancelBroadcastTimeoutLocked`发起取消超时设置。`cancelBroadcastTimeoutLocked`方法的实现如下，具体是通过移除超时信息来实现。
+
+```java
+final void cancelBroadcastTimeoutLocked() {
+        if (mPendingBroadcastTimeoutMessage) {
+            mHandler.removeMessages(BROADCAST_TIMEOUT_MSG, this);
+            mPendingBroadcastTimeoutMessage = false;
+        }
+    }
+```
+
+12、`BroadcastQueue`中的`deliverToRegisteredReceiverLocked`
+
+```java
+......
+ private void deliverToRegisteredReceiverLocked(BroadcastRecord r,
+            BroadcastFilter filter, boolean ordered) {
+    try {
+                if (DEBUG_BROADCAST_LIGHT) Slog.i(TAG_BROADCAST,
+                        "Delivering to " + filter + " : " + r);
+        //deliverToRegisteredReceiverLocked方法中系统在检查广播发送者和接收者的权限之后，最后将BroadcastRecord对象r描述的广播交给BroadcastFilter处理。接着调用performReceiveLocked（）方法。见13
+                performReceiveLocked(filter.receiverList.app, filter.receiverList.receiver,
+                        new Intent(r.intent), r.resultCode, r.resultData,
+                        r.resultExtras, r.ordered, r.initialSticky, r.userId);
+                if (ordered) {
+                    r.state = BroadcastRecord.CALL_DONE_RECEIVE;
+                }
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Failure sending broadcast " + r.intent, e);
+                if (ordered) {
+                    r.receiver = null;
+                    r.curFilter = null;
+                    filter.receiverList.curBroadcast = null;
+                    if (filter.receiverList.app != null) {
+                        filter.receiverList.app.curReceiver = null;
+                    }
+                }
+            }
+......
+```
+
+13、BroadcastQueue中的performReceiveLocked
+
+```java
+   private static void performReceiveLocked(ProcessRecord app, IIntentReceiver receiver,
+            Intent intent, int resultCode, String data, Bundle extras,
+            boolean ordered, boolean sticky, int sendingUser) throws RemoteException {
+
+        if (app != null) {
+            if (app.thread != null) {
+              //app.thread对应的就是ApplicationThreadProxy，该类是ApplicationThreadNative的内部类
+                app.thread.scheduleRegisteredReceiver(receiver, intent, resultCode,
+                        data, extras, ordered, sticky, sendingUser, app.repProcState);
+            } else {
+
+                throw new RemoteException("app.thread must not be null");
+            }
+        } else {
+
+            receiver.performReceive(intent, resultCode, data, extras, ordered,
+                    sticky, sendingUser);
+        }
+
+```
+
+14、ApplicationThreadProxy中的scheduleReceiver
+
+```java
+  public final void scheduleReceiver(Intent intent, ActivityInfo info,
+            CompatibilityInfo compatInfo, int resultCode, String resultData,
+            Bundle map, boolean sync, int sendingUser, int processState) throws RemoteException {
+        Parcel data = Parcel.obtain();
+        data.writeInterfaceToken(IApplicationThread.descriptor);
+        intent.writeToParcel(data, 0);
+        info.writeToParcel(data, 0);
+        compatInfo.writeToParcel(data, 0);
+        data.writeInt(resultCode);
+        data.writeString(resultData);
+        data.writeBundle(map);
+        data.writeInt(sync ? 1 : 0);
+        data.writeInt(sendingUser);
+        data.writeInt(processState);
+        //远程Binder对象发送Parcel 类型数据到ApplicationThread。接着调用到ApplicationThread中的scheduleRegisteredReceiver（）。ApplicationThread是ActivityThread的内部类。
+        mRemote.transact(SCHEDULE_RECEIVER_TRANSACTION, data, null,
+                IBinder.FLAG_ONEWAY);
+        data.recycle();
+    }
+```
+
+15、ApplicationThread中scheduleRegisteredReceiver
+
+```java
+public void scheduleRegisteredReceiver(IIntentReceiver receiver, Intent intent,
+                int resultCode, String dataStr, Bundle extras, boolean ordered,
+                boolean sticky, int sendingUser, int processState) throws RemoteException {
+            updateProcessState(processState, false);
+    //receiver指向一个InnerReceiver 对象，每个InnerReceiver对象封装了一个广播接收者
+
+            receiver.performReceive(intent, resultCode, dataStr, extras, ordered,
+                    sticky, sendingUser);
+        }
+```
+
+16、接着调用InnerReceiver 中的performReceive（）方法，InnerReceiver又位于类loadedApk中：
+
+```java
+ public void performReceive(Intent intent, int resultCode, String data,
+                    Bundle extras, boolean ordered, boolean sticky, int sendingUser) {
+                LoadedApk.ReceiverDispatcher rd = mDispatcher.get();
+                if (ActivityThread.DEBUG_BROADCAST) {
+                    int seq = intent.getIntExtra("seq", -1);
+                    Slog.i(ActivityThread.TAG, "Receiving broadcast " + intent.getAction() + " seq=" + seq
+                            + " to " + (rd != null ? rd.mReceiver : null));
+                }
+                if (rd != null) {
+                //接着调用到rd的performReceive（）。rd是ReceiverDispatcher的对象。在注册广播的时候每个Client端的ReceiverDispatcher都对应一个ReceiverList，接着调用到ReceiverDispatcher的performReceive（），ReceiverDispatcher是loadedApk的内部类。
+                    rd.performReceive(intent, resultCode, data, extras,
+                            ordered, sticky, sendingUser);
+                } else {
+
+                    if (ActivityThread.DEBUG_BROADCAST) Slog.i(ActivityThread.TAG,
+                            "Finishing broadcast to unregistered receiver");
+                    IActivityManager mgr = ActivityManagerNative.getDefault();
+                    try {
+                        if (extras != null) {
+                            extras.setAllowFds(false);
+                        }
+                        mgr.finishReceiver(this, resultCode, data, extras, false, intent.getFlags());
+                    } catch (RemoteException e) {
+                        Slog.w(ActivityThread.TAG, "Couldn't finish broadcast to unregistered receiver");
+                    }
+                }
+            }
+        }
+```
+
+17、ReceiverDispatcher中的performReceive，ReceiverDispatcher是loadedApk的内部类
+
+```java
+ public void performReceive(Intent intent, int resultCode, String data,
+                Bundle extras, boolean ordered, boolean sticky, int sendingUser) {
+            if (ActivityThread.DEBUG_BROADCAST) {
+                int seq = intent.getIntExtra("seq", -1);
+                Slog.i(ActivityThread.TAG, "Enqueueing broadcast " + intent.getAction() + " seq=" + seq
+                        + " to " + mReceiver);
+            }
+            Args args = new Args(intent, resultCode, data, extras, ordered,
+                    sticky, sendingUser);
+
+    //调用mActivityThread.post(args)方法，mActivityThread是一个Handler对象，该对象指向ActivityThread中的mH；因此此刻切换到广播接收者所在进程的主线程来执行args，args是一个Runnable对象。
+            if (!mActivityThread.post(args)) {
+                if (mRegistered && ordered) {
+                    IActivityManager mgr = ActivityManagerNative.getDefault();
+                    if (ActivityThread.DEBUG_BROADCAST) Slog.i(ActivityThread.TAG,
+                            "Finishing sync broadcast to " + mReceiver);
+                    args.sendFinished(mgr);
+                }
+            }
+        }
+```
+
+18、
+
+```java
+  final class Args extends BroadcastReceiver.PendingResult implements Runnable {
+  ......
+       public void run() {
+                final BroadcastReceiver receiver = mReceiver;
+                final boolean ordered = mOrdered;
+
+                if (ActivityThread.DEBUG_BROADCAST) {
+                    int seq = mCurIntent.getIntExtra("seq", -1);
+                    Slog.i(ActivityThread.TAG, "Dispatching broadcast " + mCurIntent.getAction()
+                            + " seq=" + seq + " to " + mReceiver);
+                    Slog.i(ActivityThread.TAG, "  mRegistered=" + mRegistered
+                            + " mOrderedHint=" + ordered);
+                }
+
+                final IActivityManager mgr = ActivityManagerNative.getDefault();
+                final Intent intent = mCurIntent;
+                mCurIntent = null;
+
+                if (receiver == null || mForgotten) {
+                    if (mRegistered && ordered) {
+                        if (ActivityThread.DEBUG_BROADCAST) Slog.i(ActivityThread.TAG,
+                                "Finishing null broadcast to " + mReceiver);
+                        sendFinished(mgr);
+                    }
+                    return;
+                }
+
+                Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "broadcastReceiveReg");
+                try {
+                    ClassLoader cl =  mReceiver.getClass().getClassLoader();
+                    intent.setExtrasClassLoader(cl);
+                    setExtrasClassLoader(cl);
+                    receiver.setPendingResult(this);
+        //此刻的receiver指向的是我们自己定义的BroadcastReceiver的子类例如上文的MyReceiver，此时调用的 receiver.onReceive（）就是我们在MyReceiver中重写的onReceive（）。
+                    receiver.onReceive(mContext, intent);
+                } catch (Exception e) {
+                    if (mRegistered && ordered) {
+                        if (ActivityThread.DEBUG_BROADCAST) Slog.i(ActivityThread.TAG,
+                                "Finishing failed broadcast to " + mReceiver);
+        //通知AMS，转发出来的广播以执行完毕。
+                        sendFinished(mgr);
+                    }
+                    if (mInstrumentation == null ||
+                            !mInstrumentation.onException(mReceiver, e)) {
+                        Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
+                        throw new RuntimeException(
+                            "Error receiving broadcast " + intent
+                            + " in " + mReceiver, e);
+                    }
+                }
+
+                if (receiver.getPendingResult() != null) {
+                    finish();
+                }
+                Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
+            }
+  ......
+
+  }
+```
+
