@@ -1,0 +1,91 @@
+# 委托模式、策略模式和代理模式的区别
+
+## 委托模式
+
+demo事例：老板给经理安排了A需求，经理接了，然后安排给程序员1去开发；
+
+1、开发需求的接口 DevelopmentNeeds.java
+
+```java
+package com.demo.delegate;
+/**
+ * 开发需求
+ */
+public interface DevelopmentNeeds {
+    public void doing(String needsName);
+}
+
+```
+
+2、实现改需求的两个苦逼的程序员 DevelopmentOne.java
+
+```java
+package com.demo.delegate;
+public class DevelopmentOne implements DevelopmentNeeds{
+    @Override
+    public void doing(String needsName) {
+        System.out.println("我是程序员1号，我在苦逼的开发："+needsName+"需求");
+    }
+}
+
+```
+
+DevelopmentTwo .java
+
+```java
+package com.demo.delegate;
+public class DevelopmentTwo implements DevelopmentNeeds{
+    @Override
+    public void doing(String needsName) {
+        System.out.println("我是程序员2号，我在苦逼的开发："+needsName+"需求");
+    }
+}
+
+```
+
+3、根据功能安排某个程序员做事情的经理 Director .java
+
+```java
+package com.demo.delegate;
+import java.util.HashMap;
+import java.util.Map;
+/**
+ * 经理
+ */
+public class Director implements  DevelopmentNeeds{
+    private Map<String,DevelopmentNeeds> needs = new HashMap<String,DevelopmentNeeds>();
+    public Director() {
+        needs.put("洗车",new DevelopmentOne());
+        needs.put("优惠券",new DevelopmentTwo());
+    }
+    @Override
+    public void doing(String needsName) {
+        needs.get(needsName).doing(needsName);
+    }
+}
+
+```
+
+4、DelegateTest.java
+
+```java
+package com.demo.delegate;
+public class DelegateTest {
+    public static void main(String[] args) {
+        new Director().doing("优惠券");
+    }
+}
+```
+
+委托模式可以看做是静态代理模式与策略模式的结合，策略/代理类与详细被代理类继承了同一个接口，但是又不知道内部实现。
+
+与代理模式的区别：代理模式注重过程，委托模式注重结果
+与策略模式的区别：策略模式注重内部扩展，委托模式注重外部灵活调用（存疑）
+
+## 策略模式
+
+策略容器并不知道内部策略的详细信息，因为容器并没有实现与内部策略相同的接口，即容器与内部策略只是简单的组合关系，容器只是将内部策略的行为抽取出来，进行了统一的实现。
+
+## 代理模式
+
+代理类知道被代理类的行为，因为代理类与被代理类实现的是同一个接口，因此代理类与被代理类的结构是相同的； 
