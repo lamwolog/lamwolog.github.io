@@ -1,0 +1,27 @@
+# Fragment的setUserVisibleHint
+
+> 在Fragment和ViewPager配合使用的时候，ViewPager会使用预加载机制，使得我们在没有跳转到对应页面时，可能已经加载好了，这是个非常不好的用户体验，浪费用户的流量。本篇文章主要讲解在ViewPager+TabLayout+Fragment的情况下，Fragment的懒加载机制的实现以及项目封装情况。
+
+### 一、setUserVisibleHint(boolean isVisibleToUser)
+
+setUserVisibleHint(boolean isVisibleToUser)是Fragment中的一个回调函数。当前Fragment可见时，setUserVisibleHint()回调，其中isVisibleToUser=true。当前Fragment由可见到不可见或实例化时，setUserVisibleHint()回调，其中isVisibleToUser=false。
+
+**setUserVisibleHint(boolean isVisibleToUser)调用时机**
+
+①在Fragment实例化，即在ViewPager中，由于ViewPager默认会预加载左右两个页面。此时预加载页面回调的生命周期流程：setUserVisibleHint() -->onAttach() --> onCreate()-->onCreateView()--> onActivityCreate() --> onStart() --> onResume()
+
+此时，**setUserVisibleHint() 中的参数为false，因为不可见。**
+
+②在Fragmetn可见时，即ViewPager中滑动到当前页面时，因为已经预加载过了，之前生命周期已经走到onResume() ，所以现在**只会回调：setUserVisibleHint() **。
+
+此时，**setUserVisibleHint() 中的参数为true，因为可见。**
+
+③在Fragment由可见变为不可见，即ViewPager由当前页面滑动到另一个页面，因为还要保持当前页面的预加载过程，所以**只会回调：setUserVisibleHint()**。
+
+此时，**setUserVisibleHint() 中的参数为false，因为不可见。**
+
+④由TabLayout直接跳转到一个未预加载的页面，此时生命周期的回调过程：setUserVisibleHint() -->setUserVisibleHint() -->onAttach() --> onCreate()-->onCreateView()--> onActivityCreate() --> onStart() --> onResume()
+
+**回调了两次setUserVisibleHint() ，一次代表初始化时，传入参数是false，一次代表可见时，传入参数是true。这种情况比较特殊。**
+
+**总结：无论何时，setUserVisibleHint()都是先于其他生命周期的调用，并且初始化时调用，可见时调用，由可见转换成不可见时调用，一共三次时机。**
