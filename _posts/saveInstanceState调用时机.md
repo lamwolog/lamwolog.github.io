@@ -1,2 +1,15 @@
-![image-20200702095155426](C:\Users\11103913\AppData\Roaming\Typora\typora-user-images\image-20200702095155426.png)
 
+
+竖屏
+onCreate
+onStart
+onResume
+onPause
+onSaveInstanceState -> 保存数据：123
+onStop
+onDestory
+横屏
+onCreate
+onStart
+onRestoreInstanceState->恢复数据：123
+onResume
