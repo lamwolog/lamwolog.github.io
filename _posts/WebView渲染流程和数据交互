@@ -1,0 +1,75 @@
+# WebView渲染流程和数据交互
+
+## webview 渲染html 页面流程简版：
+
+![image-20200515112232794](C:\Users\11103913\AppData\Roaming\Typora\typora-user-images\image-20200515112232794.png)
+
+html 网页中可包括三种类型的语言：HTML语言，JavaScript语言，css样式设定语言
+
+以上三种语言可以通过引用的方式嵌入在一个html网页中。
+
+>  HTML 语言：抽象了网页中各类元素，比如标题、表格、图片、段落、按钮、输入框等等，这些元素可以设定属性、位置等各类样式。可以标记不同名字，类别等等方便查找。也可以回调指定的JavaScript方法
+>
+>  JavaScript：可通过html语言回调进行执行，可以通过HTML语音中设定的名字、类别找到对应的元素，可以对HTML网页进行增删改
+>
+>  CSS样式： 可针对HTML语言中的元素，按照类别、名字、ID等类别进行样式设定，省去了单个设定的麻烦
+
+## webview渲染网页大致流程：
+
+1. App通过webview的loadURL接口传入 html 网页地址
+2. webview内部通过 chromiumnet 组件对网页内容进行下载
+3. webview异步加载下载下来的网页，对网页中的元素分别进行分类。HTML、JavaScript、CSS分别解析
+4. 通过HTML，webview搭建最基本的网页DOM树，DOM树就是HTML网页在webview引擎中的数据结构表示
+5. CSS经过解析后把样式属性填入到网页DOM树中
+6. 回调JavaScript接口，执行JavaScript脚本，对网页DOM树进行动态处理
+7. 稳定的DOM树形成后，进一步解析成Render树，去掉了一些不必要的元素（比如不需要显示的）
+8. Render树进一步形成RenderLayer数，对绘制进行分层，到这一步已经可以确定网页有几层，每层需要绘制哪些东西，具体的坐标，样式等等
+9. 调用Android平台的绘制接口对RenderLayer进行绘制，可以是CPU绘制，也可以是GPU绘制，按照绘制的元素决定。最终每层中绘制的子元素会经过合成器合成为每层的画面，每层的画面通过合成器合成层webview的画面
+
+## 数据交互：
+
+通过流程的分析可以看出，webview是网络和手机数据交互的重要枢纽。
+
+网络的数据通过webview拉取到本地。服务器也可以通过webview把本地本地数据上传到服务器，做到网页交互。
+
+如果需要截取来自服务器的网页数据，可以从webview上进行截取。同样，如果服务器想获取客户端的数据，也可以通过webview进行。
+
+```java
+//1. 本地java代码如何获取到网页内的信息？
+
+private void testEvaluateJavascript(WebView webView) {
+
+	webView.evaluateJavascript("getGreetings()", new ValueCallback<String>() {
+
+		@Override
+
+		public void onReceiveValue(String value) {
+
+			Log.i(LOGTAG, "onReceiveValue value=" + value);
+
+		}
+    });
+
+}
+
+
+
+//2. 网页内JS代码如何获取到本地的信息？
+
+webview.addJavascriptInterface(new GetTitle(), "getTitle"); // 向webview注册一个Java对象
+
+//注入JavaScript的Java类
+
+class GetTitle {
+
+	@JavascriptInterface
+
+	public void onGetTitle(String title) {
+
+		tvTitle.setText(title); //设置标题
+
+	}
+
+}
+```
+
